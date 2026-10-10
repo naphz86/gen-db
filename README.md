@@ -16,12 +16,9 @@ Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Fro
 - [1.000.000 Netzwerke](#1000000-netzwerke)
 - [Server starten](#server-starten)
 - [Netzwerke suchen](#netzwerke-suchen)
-- [Backend-Experiment](#backend-experiment)
-- [Parallelisierungsexperiment](#parallelisierungsexperiment)
 - [Multi-Omics-API](#multi-omics-api)
-- [Multi-Omics-Experiment](#multi-omics-experiment)
 - [Universelle Kodierung](#universelle-kodierung-universal-coding)
-- [Universal-Experiment](#universal-experiment-indexsuche-gegen-einzelvergleiche)
+- [Universal-API](#universal-api)
 - [Automatisch testen](#automatisch-testen)
 - [UML mit Pyreverse](#uml-mit-pyreverse)
 - [Erwerb gen-db](#erwerb-gen-db)
@@ -226,17 +223,51 @@ Beim Einfügen erzeugt `crud.create_universal_structure` die Metadaten, den Stap
 
 Für reine Mehrschicht-Adjazenzmatrizen gibt es `matrix_schema`, `encode_matrices` und `matrix_search_layers`. Jede Matrixschicht wird dabei als eigener zweistelliger Relationstyp kodiert. Das kann Multi-Omics-Strukturen im universellen Modell abbilden; es ist jedoch nicht mit der bestehenden Multi-Omics-Speicherung in `omics_networks` und `omics_layers` gleichzusetzen.
 
+### Universal-API
+
+Die universelle Kodierung kann über die REST-API verwendet werden:
+
+- `POST /api/universal/schemas` registriert ein versioniertes Schema mit `name`, `version`,
+  `coordinates` (`register` oder `local`), `features` und `relations` (jeweils `name`, `arity`,
+  `levels`). `GET /api/universal/schemas/{schema_name}?version=...` liest das Schema zurück.
+- `POST /api/universal` legt eine Struktur für ein registriertes Schema an. `entities` ist
+  entweder eine Liste von Entitätsnamen oder eine Zuordnung von Entitätsnamen zu Merkmalen.
+  `relations` ordnet Relationstypen Listen von `{ "entities": [...], "weight": 1 }`-Tupeln zu.
+- `GET /api/universal/{network_id}` liefert die dekodierte Struktur einschließlich Merkmalen
+  und gewichteten Relationen.
+- `POST /api/universal/search` verwendet dieselbe Query-Form wie das Anlegen und unterstützt
+  `schema_version`, `mode` (`coherent` oder `independent`), aktive `layers` als Namen oder
+  Indizes sowie `include_existence`.
+
+Beispiel für ein Matrixschema mit zwei lokalen Relationsschichten:
+
+```json
+{
+  "name": "expression-layers",
+  "version": 1,
+  "coordinates": "local",
+  "relations": [
+    {"name": "transcriptome", "arity": 2, "levels": 1},
+    {"name": "proteome", "arity": 2, "levels": 1}
+  ]
+}
+```
+
+Die API-Endpunkte sind unabhängig von den bestehenden `/api/networks`- und
+`/api/multiomics`-Speicherpfaden. Die Datenbank muss zuvor mit den universellen Tabellen aus
+`init-db.sql` initialisiert worden sein.
+
 ### Aktueller Integrationsstand
 
-Die universelle Kodierung ist derzeit auf Kern-, Schema- und CRUD-Ebene implementiert und wird durch die Universal-Tests geprüft. Die normalen HTTP- und Frontend-Suchwege verwenden sie noch nicht:
+Die universelle Kodierung ist auf Kern-, Schema-, CRUD- und HTTP-API-Ebene implementiert und wird durch Universal-Tests geprüft. Die API stellt einen eigenständigen HTTP-Suchweg bereit:
 
 - `/api/networks/search` ruft `crud.search_subgraph` auf und sucht in `network_matrices` mit dem bisherigen Subgraph-Algorithmus.
 - `/api/multiomics/search` ruft `crud.search_multiomics` auf und sucht in `omics_networks` und `omics_layers` mit dem Multi-Omics-Algorithmus.
-- `crud.search_universal` ist vorhanden, aber `app.py` stellt dafür derzeit keinen HTTP-Endpunkt bereit. Das Frontend kann diesen Suchpfad daher ebenfalls nicht aufrufen.
+- `/api/universal/search` ruft `crud.search_universal` auf und sucht im SQL-Paarindex. Die Universal-API ist noch nicht in das Web-Frontend eingebunden.
 - `db-populate.py` erzeugt standardmäßig 1.000.000 klassische Einzelnetzwerke und 1.000 Multi-Omics-Datensätze. Die Befüllung schreibt jeweils sowohl in die bisherigen Tabellen als auch in `universal_structures`, `universal_components` und `universal_pairs`; sie verwendet dafür die versionierten Schemata `gen-db-populated-graph` und `gen-db-populated-multiomics`. Die Universal-Stapel und Paarlisten werden batchweise in derselben Transaktion wie die jeweiligen klassischen Zeilen geschrieben. Das Skript setzt voraus, dass `init-db.sql` einschließlich der universellen Tabellen ausgeführt wurde. Im Repository heißt das Skript `db-populate.py`; eine Datei `db-populate.sql` gibt es nicht.
-- Der Populate-Dual-Write erzwingt Universal Coding für diese erzeugten Datensätze, stellt aber keine automatische Migration vorhandener Netzwerke dar. Auch die normalen HTTP-Erstellungsrouten schreiben bislang nur ihre klassischen Tabellen; die HTTP-Suchrouten nutzen weiterhin die oben beschriebenen klassischen Pfade.
+- Der Populate-Dual-Write erzwingt Universal Coding für diese erzeugten Datensätze, stellt aber keine automatische Migration vorhandener Netzwerke dar. Die normalen HTTP-Erstellungsrouten schreiben weiterhin nur ihre klassischen Tabellen; die Universal-API erstellt unabhängig davon universelle Strukturen.
 
-Der Populate-Pfad schreibt bewusst in beide Repräsentationen, sodass die bestehenden Endpoints ihre bisherigen Daten weiterhin finden. Für eine vollständige Laufzeitintegration fehlen weiterhin passende HTTP-Schemas und Endpunkte, Universal-Suchaufrufe in den bestehenden Routen und eine Entscheidung, welche bereits vorhandenen Netzwerk- und Multi-Omics-Datensätze automatisch konvertiert werden.
+Der Populate-Pfad schreibt bewusst in beide Repräsentationen, sodass die bestehenden Endpoints ihre bisherigen Daten weiterhin finden. Eine automatische Migration vorhandener Datensätze und die Integration der Universal-Suche in die bestehenden Routen sind nicht Teil dieser API.
 
 ### Universal-Experiment: Indexsuche gegen Einzelvergleiche
 
