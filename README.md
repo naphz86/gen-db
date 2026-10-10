@@ -1,6 +1,6 @@
 ﻿# gen-db
 
-Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Frontend zur Analyse biologischer Netzwerke mittels Subgraph Algorithmus.
+Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Frontend zur Analyse biologischer Netzwerke. Neben der klassischen Subgraph-Suche unterstützt das Projekt Multi-Omics-Daten und eine schemaabhängige universelle Kodierung mit SQL-Paarindex.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/Tests-727%20passed-4c1)](tests/)
@@ -12,15 +12,19 @@ Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Fro
 - [Voraussetzungen](#voraussetzungen)
 - [Installation](#installation)
 - [Abhängigkeiten](#abhängigkeiten)
-- [SQL-Struktur](#sql-strutkur)
+- [SQL-Struktur](#sql-struktur)
 - [1.000.000 Netzwerke](#1000000-netzwerke)
 - [Server starten](#server-starten)
 - [Netzwerke suchen](#netzwerke-suchen)
+- [Backend-Experiment](#backend-experiment)
+- [Parallelisierungsexperiment](#parallelisierungsexperiment)
 - [Multi-Omics-API](#multi-omics-api)
+- [Multi-Omics-Experiment](#multi-omics-experiment)
 - [Universelle Kodierung](#universelle-kodierung-universal-coding)
+- [Universal-Experiment](#universal-experiment-indexsuche-gegen-einzelvergleiche)
 - [Automatisch testen](#automatisch-testen)
-- [Wahrheit: Pyreverse](#wahrheit-pyreverse)
-- [Erwerb Gen-DB](#erwerb-gen-db)
+- [UML mit Pyreverse](#uml-mit-pyreverse)
+- [Erwerb gen-db](#erwerb-gen-db)
 
 ## Voraussetzungen
 
@@ -105,6 +109,32 @@ python src/experiment_search_backends.py --plot-from src/results/search_backends
 
 Mit `--queries 2` kann vor einer längeren Messung ein kleiner Vorabtest ausgeführt werden. Während des Experiments sollte der API-Server beendet sein, damit er nicht mit den Worker-Prozessen um Ressourcen konkurriert.
 
+#### Parallelisierungsexperiment
+
+`src/experiment_search_workers.py` vergleicht dieselben Datenbankanfragen mit unterschiedlich vielen Prozess-Workern. Der Messwert umfasst die vollständige Suche einschließlich Laden der Kandidaten und Aufbau der Trefferliste; Warm-up-Läufe werden verworfen.
+
+```powershell
+python src/experiment_search_workers.py --queries 6 --workers 1 2 3 --seed 42
+```
+
+Im abgeschlossenen Lauf vom 5. Oktober 2026 wurden sechs mit Seed `42` aus der Datenbank ausgewählte Anfragen mit mindestens 15 Knoten verwendet. Auf dem Messsystem (Linux, Python 3.13.16, zwei logische CPUs) ergaben sich:
+
+| Worker | Gesamtzeit | Mittlere Zeit je Anfrage | Speedup gegenüber 1 Worker |
+|---:|---:|---:|---:|
+| 1 | 1.604,17 s | 267,4 s | 1,00× |
+| 2 | 843,09 s | 140,5 s | 1,90× |
+| 3 | 907,64 s | 151,3 s | 1,77× |
+
+Zwei Worker senkten die Gesamtzeit in diesem Lauf um rund 47 %; drei Worker waren rund 7,7 % langsamer als zwei. Das ist mit den zwei logischen CPUs und dem zusätzlichen Prozess- und Koordinationsaufwand vereinbar, belegt aber keine allgemeine optimale Worker-Zahl. Der Test umfasst nur sechs Anfragen und einen Messlauf; die Werte sind daher ein systemspezifischer Anhaltspunkt, keine Leistungsgarantie. Die Ergebnisse und Einzelmessungen liegen in [`search_workers_20261005_071729.json`](src/results/search_workers_20261005_071729.json); der Textbericht steht in [`experiment_log.txt`](src/results/experiment_log.txt).
+
+In der Arbeit werden die sechs Queries einzeln gepaart ausgewertet: Mit zwei Workern liegt ihr Speedup jeweils zwischen `1,87×` und `1,93×`; mit drei Workern zwischen `1,70×` und `1,84×`. Die Kandidatenzahlen reichen von `62.064` bis `325.964` (insgesamt `1.249.054`). Für diese Stichprobe korreliert die Suchzeit mit mindestens `0,99` mit der Kandidatenzahl. Das stützt die lineare Abhängigkeit von der Zahl tatsächlich verglichener Kandidaten, nicht aber eine von der Datenbankgröße unabhängige Laufzeit: Ohne Kandidatenlimit wächst die Kandidatenmenge bei gleichbleibender Selektivität mit der Datenbank und damit auch die Suchzeit. Die Messreihe durchsuchte alle Kandidaten; die längste Query benötigte `403,2 s` mit einem und `212,0 s` mit zwei Workern.
+
+Nur die Kandidatenvergleiche laufen parallel. SQL-Laden, Übergabe/Serialisierung und Aufbau der Trefferliste bleiben im Hauptprozess. Aus dem Speedup von `1,90×` lässt sich für diesen Lauf ein serieller Anteil von ungefähr `5 %` abschätzen; da keine Phasenzeiten geloggt wurden, ist das keine direkte Phasenmessung und keine feste Systemeigenschaft. Die Arbeit beweist unter der angenommenen Reinheit der Vergleichsfunktion, dass die parallele Suche unabhängig von Worker-Zahl, Chunk-Größe und Fertigstellungsreihenfolge dieselbe sortierte Trefferliste wie die sequentielle Suche liefert. Die Zuordnung der Resultate zur ursprünglichen Kandidatenreihenfolge ist dafür wesentlich.
+
+Die drei Worker waren langsamer als zwei. Zur Hardware gibt es allerdings eine Abweichung zwischen den Quellen: Das Kapitel `science/gen-db.tex` verortet diese Messreihe auf einem Rechner mit vier logischen Prozessoren, die Metadaten der zugehörigen JSON-Datei nennen Linux und `logical_cpus=2`. Diese Diskrepanz sollte vor einer weitergehenden Interpretation geklärt werden. Unabhängig davon belegen sechs Queries und ein Lauf je Konfiguration weder eine allgemeine Obergrenze noch eine feste optimale Worker-Zahl. Worker-Zahl und Suchlast sollten auf dem Zielsystem gemessen werden; Parallelisierung senkt die Antwortzeit, ersetzt aber keinen selektiveren Vorfilter oder ein Kandidatenlimit.
+
+Die universelle Suche besitzt zusätzlich eigene Teilexperimente für Worker-Skalierung und Chunk-Größe. Für den derzeit gespeicherten Universal-Lauf liegen dazu noch keine abgeschlossenen Ergebnisse vor; siehe [Universal-Experiment](#universal-experiment-indexsuche-gegen-einzelvergleiche).
+
 ### Multi-Omics
 
 Ein Multi-Omics-Netzwerk besteht aus mehreren Schichten (z. B. Transkriptom, Proteom, Metabolom) über denselben Knoten. Jede Schicht ist eine eigene Adjazenzmatrix, alle Schichten teilen sich die `node_labels`. Gespeichert wird es in den Tabellen `omics_networks` und `omics_layers`; die Metadaten stehen wie bei jedem Netzwerk in `biological_networks` (`edge_count` ist die Summe über alle Schichten, Löschen entfernt per `CASCADE` auch die Schichten). Die Zeilenkomponenten je Schicht liegen als `BIGINT[]` vor und passen bis 63 Knoten hinein.
@@ -132,6 +162,35 @@ python src/experiment_search_multiomics.py --cleanup-only
 ```
 
 Das Experiment legt synthetische Netzwerke mit dem Typ `multi_omics_experiment` in der Datenbank an (Zufallsnetzwerke und je eingebetteter Anfrage Netzwerke mit bekannter Lösung); andere Netzwerke bleiben unverändert. `--cleanup` entfernt die Experiment-Netzwerke am Ende, `--rebuild-data` erzeugt sie neu. Die Ergebnisse (JSON, PDF, Textbericht, LaTeX-Tabellen, `plot11_…` bis `plot26_…`) liegen unter `src/results/`. Das Skript ist in `pyproject.toml` unter `omit` eingetragen und zählt nicht zur Testabdeckung.
+
+##### Ergebnisse der Parallelisierungs- und Chunk-Reihen
+
+Die Arbeit wertet die abgeschlossenen Worker- und Chunk-Reihen des Multi-Omics-Experiments getrennt für Python und C++ aus. Die Messungen stammen von einem Rechner mit vier physischen/logischen Prozessoren (Intel Core i3-8100T), Windows 11, Python 3.14.8 und 7,87 GB RAM. Je Reihe wurden dieselben sechs Queries zweimal gemessen.
+
+| Worker | Python Gesamtzeit | Python Speedup | C++ Gesamtzeit | C++ Speedup |
+|---:|---:|---:|---:|---:|
+| 1 | 74,73 s | 1,00× | 24,08 s | 1,00× |
+| 2 | 50,31 s | 1,49× | 19,69 s | 1,22× |
+| 3 | 39,14 s | 1,91× | 20,08 s | 1,20× |
+| 4 | 35,55 s | 2,10× | 18,68 s | 1,29× |
+
+Python profitiert in dieser Reihe mit wachsender Worker-Zahl bis vier; C++ skaliert deutlich schwächer und der Unterschied zwischen zwei und vier Workern bleibt klein. Die Arbeit ordnet dies als Effekt der nach Beschleunigung des Vergleichskerns relativ stärker ins Gewicht fallenden Lade- und Übergabekosten ein. Bei vier Workern wird der serielle Anteil mit etwa `19,7 %` für Python und `58,9 %` für C++ abgeschätzt. Der schnellere Kern senkt also nicht nur die Gesamtzeit, sondern verschiebt den Engpass: Weitere Worker oder eine noch schnellere Vergleichsfunktion können die seriellen Phasen nicht im gleichen Verhältnis beschleunigen.
+
+Bei zwei Workern ergab sich für die Chunk-Größe folgende aufsummierte Laufzeit der sechs Queries in zwei Wiederholungen:
+
+| Chunk-Größe | Python | C++ |
+|---:|---:|---:|
+| 1 | 58,39 s | 33,71 s |
+| 8 | 48,13 s | 18,58 s |
+| 32 | 42,50 s | 18,03 s |
+| 128 | 41,14 s | 18,33 s |
+| 256 (Standard) | 45,54 s | 18,80 s |
+| 1.024 | 51,46 s | 20,25 s |
+| 4.096 | 64,26 s | 23,74 s |
+
+Die beste beobachtete Chunk-Größe war `128` für Python und `32` für C++; gegenüber dem Standard `256` waren die Gesamtlaufzeiten um rund `9,7 %` beziehungsweise `4,1 %` niedriger. Sehr kleine Chunks erhöhen den Aufgaben- und Übergabeaufwand, sehr große Chunks können die Lastverteilung verschlechtern. Mit sechs Queries und zwei Wiederholungen sind dies jedoch keine universellen optimalen Einstellungen: Sie hängen vom Backend, der Hardware und der Arbeitslast ab und sollten auf dem Zielsystem kalibriert werden. Die Datenbankgrößenreihe des Experiments wurde abgebrochen; daraus wird keine Skalierungsaussage abgeleitet.
+
+Die detaillierte formale Einordnung, darunter die Schranke für dynamische Blockplanung und ihre Annahmen, steht in [science/gen-db.tex](science/gen-db.tex). Die Rohdaten der Multi-Omics-Messreihe sind in [`search_multiomics_20261008_115430.json`](src/results/search_multiomics_20261008_115430.json) und [`search_multiomics_20261008_115430.txt`](src/results/search_multiomics_20261008_115430.txt) abgelegt.
 
 Die Kandidaten werden nur nach der Knotenzahl (`node_count >= n_Query`) und dem Vorhandensein aller Query-Schichten vorgefiltert. Eine Vorauswahl nach der Kantenzahl gibt es hier bewusst nicht: Mit der Relation des Algorithmus kann ein Graph mit mehr Kanten in einem Graphen mit weniger Kanten enthalten sein (Beispiel in `tests/test_multiomics_python.py::test_edge_count_is_not_monotone`).
 
@@ -240,11 +299,28 @@ Aus einer vorhandenen JSON-Datei lassen sich PDF, Diagramme, Tabellen und Berich
 python src/experiment_search_universal.py --plot-from src/results/search_universal_<zeit>.json
 ```
 
-Für die Diagramme wird `matplotlib` benötigt, für die Variante `cpp` eine `libsubgraphlib.a` mit `MultiOmics`. Das Skript ist in `pyproject.toml` unter `omit` eingetragen und zählt nicht zur Testabdeckung. Bisher liegt noch kein Messlauf dieses Experiments unter `src/results/`; die Aussagen der Sätze im Kapitel „Universelle Kodierung“ sind damit noch nicht durch Messwerte belegt.
+#### Ergebnisse des gespeicherten Laufs
+
+Der Lauf vom 10. Oktober 2026 verwendete Seed `42`, 20.000 synthetische Zufallsnetzwerke sowie eingebettete Testnetzwerke und fünf benannte Schichten (zusätzlich zur Existenzschicht des kodierten Stapels). Das JSON enthält Messungen unter Windows 11, Python 3.15.0 und PostgreSQL 18.6. Es wurde mit zwei Workern und drei geplanten Wiederholungen konfiguriert.
+
+| Teilmessung | Ergebnis |
+|---|---|
+| Korrektheit des Vergleichs | 5.000 Paare, verglichen in beiden Modi: 10.000 Übereinstimmungen mit `multiomics_python` und 10.000 mit C++; keine Abweichungen oder Fehler. Zusätzlich 10.000 Projektionsprüfungen ohne Abweichung oder Monotonieverletzung. |
+| Korrektheit des `PairIndex` | Auf 150 Strukturen und fünf Schichten wurden 240 Queries und 1.840 Prüfungen ausgeführt; keine Abweichungen bei Suche oder Klassifikation. Der Index enthielt 8.516 Paareinträge. |
+| In-Memory-Skalierung | Fünf Größenstufen von 425 bis 5.175 gespeicherten Strukturen (5.000 Zufallsstrukturen plus 175 bekannte Treffer im größten Lauf). Bei 5.175 Strukturen war das Medianverhältnis aus linearer Suche zu Indexsuche über acht Queries `215×` im Modus `independent` und `293×` im Modus `coherent`; die Trefferlisten stimmten jeweils überein. Diese Messung isoliert den In-Memory-Index und schließt Datenbankzugriff und Laden aus. |
+| Vorläufiger Ende-zu-Ende-Vergleich | Für alle 56 Queries und beide Modi liegen je eine Messung für `index` und `python` vor. Die Ergebnis-IDs stimmten in allen 112 Query-Modus-Paaren überein. Mittlere Zeit: `index` 0,150 s (`independent`) und 0,226 s (`coherent`); `python` 14,324 s bzw. 15,838 s. Das entspricht in diesem einzelnen Durchlauf etwa `95,5×` bzw. `70,1×`. |
+
+**Wichtige Einschränkung:** Dieser Messlauf ist ausdrücklich unvollständig (`complete=false`). Obwohl drei Wiederholungen konfiguriert waren, enthält der gespeicherte Ende-zu-Ende-Vergleich nur `rep=0` für `index` und `python`. Die Ende-zu-Ende-Messungen für `mo_python` und `cpp` sowie die Teilexperimente `workers`, `chunksize` und `dbsize` wurden nicht abgeschlossen. Beim Eintritt in die Worker-Messung erkannte das Skript `csubgraph` statt des erwarteten `python`-Backends und brach ab. Die Ende-zu-Ende-Zahlen sind deshalb vorläufig und nicht als abgeschlossener Vier-Varianten-Vergleich zu verstehen.
+
+Die Messwerte gelten nur für den genannten synthetischen Versuchsaufbau. Insbesondere ist der In-Memory-Speedup nicht mit dem Ende-zu-Ende-Speedup gleichzusetzen; der SQL-Zugriff, die Kandidatenmenge, Prozesskommunikation und das Ergebnisbauen beeinflussen die tatsächliche Suchzeit. Eine vollständige Wiederholung mit den vorgesehenen Backends, Wiederholungen und Worker-/Chunk-Größen ist erforderlich, bevor belastbare Aussagen über deren Skalierung getroffen werden können.
+
+Der JSON-Rohdatensatz ist [`search_universal_20261010_103804.json`](src/results/search_universal_20261010_103804.json); der Laufbericht ist [`search_universal_20261010_103804.txt`](src/results/search_universal_20261010_103804.txt). Das Skript speichert die Rohdaten auch für unvollständige Läufe, wodurch die tatsächlich beendeten Teilmessungen nachvollziehbar bleiben.
+
+Für die Diagramme wird `matplotlib` benötigt, für die Variante `cpp` eine `libsubgraphlib.a` mit `MultiOmics`. Das Skript ist in `pyproject.toml` unter `omit` eingetragen und zählt nicht zur Testabdeckung.
 
 Die Experimente messen die Suche auf Funktionsebene (`crud.search_universal`). Die HTTP- und Frontend-Suchwege nutzen die universelle Suche weiterhin nicht (siehe [Aktueller Integrationsstand](#aktueller-integrationsstand)); vorrangig bleiben ein durchgängiger Schreib- und Suchpfad über die API sowie Korrektheitstests, die dieselben Strukturen über direkte Universal-CRUD-Aufrufe und die API abgleichen.
 
-## SQL-Strutkur
+## SQL-Struktur
 
 Die Datenbankstruktur wird durch `init-db.sql` definiert und ist bewusst einfach, aber für die Suche nach biologischen Netzwerken effizient aufgebaut. Das Schema besteht aus zwei zentralen Tabellen, die zusammen den eigentlichen Netzwerkinhalt und die zugehörigen Metadaten modellieren.
 
@@ -479,7 +555,7 @@ Biologische Prozesse spielen sich selten auf nur einer Ebene ab: Ein Gen wird tr
 - **Knoten** sind für alle Schichten gleich. `node_labels` gibt ihnen Namen, die Reihenfolge entspricht den Zeilen und Spalten jeder Matrix.
 - **Jede Schicht** ist eine quadratische Adjazenzmatrix (`n × n`) mit den Werten `0` und `1`. Der Eintrag in Zeile `i`, Spalte `j` beschreibt die Kante zwischen Knoten `i` und `j`.
 - **Schichten werden über ihren Namen identifiziert.** Ein Netzwerk darf jeden Namen nur einmal verwenden.
-- **Gespeichert** wird in `biological_networks` (Metadaten), `omics_networks` (Knoten-Labels) und `omics_layers` (eine Zeile je Schicht, siehe [SQL-Struktur](#sql-strutkur) und `init-db.sql`). `edge_count` ist die Summe über alle Schichten.
+- **Gespeichert** wird in `biological_networks` (Metadaten), `omics_networks` (Knoten-Labels) und `omics_layers` (eine Zeile je Schicht, siehe [SQL-Struktur](#sql-struktur) und `init-db.sql`). `edge_count` ist die Summe über alle Schichten.
 
 ### Schnellstart in drei Schritten
 
@@ -788,7 +864,7 @@ pytest
 ```
 Der Coverage-Report wird automatisch generiert nach `doc/coverage/index.html`.
 
-## Wahrheit: Pyreverse
+## UML mit Pyreverse
 
 Die Wahrheit steht immer im Code.
 
@@ -802,7 +878,7 @@ Analysed 13 modules with a total of 14 imports
 (venv) PS C:\Users\Internet\Git\gen-db> 
 ```
 
-## Erwerb Gen-DB
+## Erwerb gen-db
 
 Der Preis für diese Software beträgt 5.745.000,00 EUR.
 
