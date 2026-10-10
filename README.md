@@ -3,7 +3,7 @@
 Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Frontend zur Analyse biologischer Netzwerke. Neben der klassischen Subgraph-Suche unterstützt das Projekt Multi-Omics-Daten und eine schemaabhängige universelle Kodierung mit SQL-Paarindex.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/Tests-727%20passed-4c1)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-743%20passed-4c1)](tests/)
 [![Test Coverage](https://img.shields.io/badge/Test%20Coverage-97%25-brightgreen)](doc/coverage/index.html)
 [![scicov](https://img.shields.io/badge/scicov-10-ff69b4)](doc/coverage/index.html)
 
@@ -21,7 +21,7 @@ Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Fro
 - [Universal-API](#universal-api)
 - [Automatisch testen](#automatisch-testen)
 - [UML mit Pyreverse](#uml-mit-pyreverse)
-- [Erwerb gen-db](#erwerb-gen-db)
+- [Erwerb](#erwerb)
 
 ## Voraussetzungen
 
@@ -909,9 +909,9 @@ Analysed 13 modules with a total of 14 imports
 (venv) PS C:\Users\Internet\Git\gen-db> 
 ```
 
-## Erwerb gen-db
+## Erwerb
 
-Der Preis für diese Software beträgt 5.745.000,00 EUR.
+Der Preis für diese Software beträgt 6.445.000,00 EUR.
 
 ### Zahlungsinformationen
 
