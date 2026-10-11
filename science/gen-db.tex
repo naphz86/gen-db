@@ -112,6 +112,7 @@
 
 \begin{document}
 
+\pagenumbering{roman}
 \maketitle
 
 % Drei Gliederungsebenen im Inhaltsverzeichnis: Chapters, Sections und Subsections.
@@ -119,6 +120,7 @@
 \tableofcontents
 \newpage
 
+\pagenumbering{arabic}
 \chapter{Einführung}
 \label{sec:einleitung}
 
@@ -230,17 +232,18 @@ Das abschließende Kapitel „Schluss“ (Abschnitt~\ref{sec:schluss}) besteht a
 \end{proof}
 
 \begin{definition}[Subgraph-Relation, zyklisch]
-	Für Adjazenzmatrizen $A \in \{0,1\}^{n_A \times n_A}$ und $B \in \{0,1\}^{n_B \times n_B}$ mit $n_A \le n_B$ schreiben wir $A \preceq B$ (``$A$ ist zyklischer Subgraph von $B$''), wenn es eine zyklische Rotation $r \in \{0,\ldots,n_B-1\}$ und eine Startposition $s$ gibt, sodass die Zeilenkomponenten der Signaturen von $A$ als längste gemeinsame Teilsequenz (LCS) der Länge $\geq 2$ in der rotierten Zeilenkomponentensequenz von $B$ ab Position $s$ auftreten.
+	Für Adjazenzmatrizen $A \in \{0,1\}^{n_A \times n_A}$ und $B \in \{0,1\}^{n_B \times n_B}$ mit $n_A \le n_B$ schreiben wir $A \preceq B$, wenn die vollständige Zeilenkomponentensequenz $\rho(A)$ eine Teilsequenz von $\rho(B)$ nach einer zyklischen Rotation ist. Äquivalent dazu hat eine längste gemeinsame Teilsequenz der beiden Folgen die Länge $n_A$. Diese Relation ist nicht die klassische Subgraph-Isomorphie; sie fixiert die Knotenordnung bis auf zyklische Rotation.
 \end{definition}
 
 \section{Der Subgraph Algorithmus}
 
-Der Subgraph Algorithmus \cite{epp2026subgraph} berechnet für zwei Matrizen $A, B$ in drei Schritten, ob $A \preceq B$, $B \preceq A$, beide äquivalent oder unvergleichbar sind:
+Der formale Subgraph-Vergleich \cite{epp2026subgraph} berechnet für zwei Matrizen $A, B$ in folgenden Schritten, ob $A \preceq B$, $B \preceq A$, beide äquivalent oder unvergleichbar sind:
 
 \begin{enumerate}
-	\item Berechne $\Sigma(A)$ und $\Sigma(B)$ — Aufwand $O(n_A^2 + n_B^2)$.
-	\item Extrahiere Zeilenkomponenten $\rho(A) = (\sigma_j(A) \bmod 2^{n_A})_j$, analog für $B$.
-	\item Für jede der $n_B$ zyklischen Rotationen von $\rho(B)$: Vergleiche mit $\rho(A)$ via LCS in $O(n_A \cdot n_B)$.
+	\item Validiere die Eingaben und berechne $\Sigma(A)$ und $\Sigma(B)$ — Aufwand $O(n_A^2+n_B^2)$.
+	\item Entferne die Positionskodierung aus jeder Signatur. Es entstehen die Zeilenkomponenten $\rho(A)=(\sigma_j(A)\bmod 2^{n_A})_j$ und analog $\rho(B)$.
+	\item Prüfe bei zulässiger Größenordnung jede zyklische Rotation der jeweils größeren Folge darauf, ob die vollständige kleinere Folge als Teilsequenz auftritt. Dies entspricht einer dynamischen LCS-Prüfung mit Schwellwert $n_{\mathrm{klein}}$ und kostet $O(n_A n_B)$ pro Rotation.
+	\item Führe den Test in beiden Richtungen aus und leite aus den beiden booleschen Ergebnissen einen Ergebniswert ab.
 \end{enumerate}
 
 \begin{satz}[Laufzeit des Subgraph Algorithmus]
@@ -249,10 +252,114 @@ Der Subgraph Algorithmus \cite{epp2026subgraph} berechnet für zwei Matrizen $A,
 \end{satz}
 
 \begin{proof}
-	Schritt 1 ist $O(n^2)$. Schritt 3 besteht aus $n_B \le n$ Rotationen, jede mit LCS-Vergleich in $O(n_A n_B) \subseteq O(n^2)$, insgesamt $O(n^3)$. Schritt 2 ist $O(n)$. Die Summe ist $O(n^2) + O(n) + O(n^3) = O(n^3)$.
+	Schritt 1 ist $O(n^2)$. Schritt 3 besteht aus höchstens $n$ Rotationen je Richtung, jede mit einem LCS-Vergleich in $O(n_A n_B)\subseteq O(n^2)$, insgesamt also $O(n^3)$. Schritt 2 ist $O(n)$. Die Summe ist $O(n^2)+O(n)+O(n^3)=O(n^3)$.
 \end{proof}
 
 Eine vollständige Optimalitätsanalyse $\Omega(n^{3-\varepsilon})$ unter SETH findet sich in \cite{epp2026subgraph}; sie wird hier als gegeben vorausgesetzt und in Abschnitt~\ref{sec:pipeline} auf den Datenbankkontext übertragen.
+
+\subsection{Konkrete Umsetzung in der C++17-Bibliothek}
+\label{sec:cpp_impl}
+
+Der native Rechenkern ist als C++17-Bibliothek \texttt{subgraphlib} im Projekt \texttt{csubgraph} implementiert. Die öffentliche Schnittstelle steht in \texttt{SubgraphAlgorithm.h}; die Umsetzung liegt in \texttt{SubgraphAlgorithm.cpp}. Matrizen und Folgen werden als \texttt{std::vector<std::vector<int>>} beziehungsweise \texttt{std::vector<uint64\_t>} repräsentiert. Die zentrale Funktion \texttt{compareGraphs} nimmt beide Matrizen als konstante Referenzen entgegen, gibt einen typisierten \texttt{Result}-Wert zurück und wirft bei ungültiger Eingabe \texttt{std::invalid\_argument}. Die Daten werden somit nicht über selbst verwaltete Zeiger übergeben; die temporären Signatur-, Rotations- und DP-Strukturen besitzen automatische Lebensdauer.
+
+\subsubsection*{Signaturen als Bitmasken}
+
+\texttt{calculateSignatures} verarbeitet jede Spalte $j$ und setzt für jede eingehende Kante aus Zeile $i$ das Bit $i$ der Zeilenkomponente. Anschließend wird der Spaltenindex oberhalb dieser $n$ Bits abgelegt. Für die Kette $0\to1\to2$ mit
+\[
+A=\begin{pmatrix}0&1&0\\0&0&1\\0&0&0\end{pmatrix}
+\]
+ergeben sich die Zeilenkomponenten $(0,1,2)$: Spalte $0$ enthält keine Eins, Spalte $1$ das Bit $0$, Spalte $2$ das Bit $1$. Die vollständigen Signaturen sind $(0,9,18)$, weil die Positionsanteile $0\cdot 2^3$, $1\cdot 2^3$ und $2\cdot 2^3$ addiert werden. Der entsprechende Kern der C++-Schleife lautet:
+
+\begin{lstlisting}[language=C++, caption={Bitweise Berechnung der Spaltensignaturen}]
+for (std::size_t j = 0; j < n; ++j) {
+    std::uint64_t rows = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (matrix[i][j] != 0) {
+            rows |= (std::uint64_t{1} << i);
+        }
+    }
+    const std::uint64_t position =
+        static_cast<std::uint64_t>(j) << n;
+    signatures.push_back(rows + position);
+}
+\end{lstlisting}
+
+Die Addition ist hier eine Konkatenation zweier nicht überlappender Bitbereiche: Die Kantenbits liegen unterhalb von Position $n$, die Positionskodierung beginnt ab diesem Bit. Die Funktion \texttt{extractRowComponents} entfernt den oberen Anteil durch Maskierung mit $(2^n-1)$. \texttt{compareGraphs} vergleicht anschließend diese Komponentenfolgen; die Positionskodierung trägt dazu bei, die Signaturen innerhalb einer Matrix unterscheidbar zu machen, gehört aber nicht zum Mustervergleich.
+
+\begin{lstlisting}[language=C++, caption={Extraktion der unteren $n$ Bits aus jeder Signatur}]
+const std::uint64_t mask = (std::uint64_t{1} << n) - 1;
+for (const std::uint64_t signature : signatures) {
+    rowComponents.push_back(signature & mask);
+}
+\end{lstlisting}
+
+\subsubsection*{Validierung und Identität}
+
+Vor der Berechnung prüft \texttt{isValidAdjacencyMatrix}, dass eine Matrix nicht leer, quadratisch und binär ist. \texttt{compareGraphs} validiert beide Argumente und gibt bei Verletzung eine beschreibende Ausnahme aus. Danach werden Signaturen und Zeilenkomponenten berechnet. Haben beide Graphen dieselbe Knotenzahl und dieselbe Zeilenkomponentenfolge, wird sofort \texttt{IDENTICAL} zurückgegeben. Dieser Sonderfall verhindert Rotations- und DP-Arbeit für exakt gleiche, geordnete Repräsentationen. Er ist bewusst nicht gleichbedeutend mit Isomorphie unter beliebiger Knotenpermutation.
+
+\subsubsection*{Längste gemeinsame zusammenhängende Teilfolge}
+
+Die Funktion heißt im Quellcode \texttt{computeLCS}, berechnet aber nicht die klassische \emph{Longest Common Subsequence}, bei der Elemente übersprungen werden dürfen. Sie berechnet die längste gemeinsame \emph{zusammenhängende} Teilfolge (Longest Common Substring). In der dynamischen Tabelle wird ein Treffer nur diagonal fortgesetzt; bei Ungleichheit wird auf null zurückgesetzt:
+
+\begin{lstlisting}[language=C++, caption={Dynamische Programmierung für zusammenhängende Übereinstimmungen}]
+if (seqA[i - 1] == seqB[j - 1]) {
+    dp[i][j] = dp[i - 1][j - 1] + 1;
+    maxLength = std::max(maxLength, dp[i][j]);
+} else {
+    dp[i][j] = 0;
+}
+\end{lstlisting}
+
+Ein Beispiel macht den Unterschied sichtbar: Für $(1,2,3,4)$ und $(1,3,4)$ ist die längste gemeinsame Teilsequenz ohne Zusammenhängendheitsforderung $(1,3,4)$ der Länge drei; die längste gemeinsame \emph{zusammenhängende} Teilfolge ist dagegen $(3,4)$ der Länge zwei. Die native Einzelgraph-Implementierung akzeptiert eine Richtung, sobald dieser zusammenhängende Höchstwert mindestens zwei beträgt. Dafür reserviert sie eine vollständige Tabelle der Größe $(n_A+1)(n_B+1)$; der Speicherbedarf dieses Schritts ist $O(n_A n_B)$.
+
+\begin{bemerkung}[Abweichung der nativen Einzelgraph-Implementierung von der formalen Relation]
+	\label{bem:cpp_relation}
+	Die tatsächlich vorliegende Funktion \texttt{SubgraphAlgorithm::compareGraphs} setzt nicht die in Abschnitt~\ref{sec:grundlagen} definierte vollständige Teilsequenzrelation um. Sie prüft mit \texttt{computeLCS} lediglich, ob nach einer Rotation eine gemeinsame \emph{zusammenhängende Teilfolge} der Länge mindestens zwei existiert. Im Folgenden bezeichnen wir diese schwächere, vom C++-Code entschiedene Relation mit $\preceq_{\mathrm{pair}}$. Weder muss die ganze Folge $\rho(A)$ auftreten, noch berechnet \texttt{computeLCS} eine nicht zusammenhängende LCS. Die folgende Definition gibt die Implementierung wieder:
+	\[
+	A\preceq_{\mathrm{pair}} B
+	\iff n_A\le n_B\ \land\
+	\exists r:\ \operatorname{LCSubstr}\bigl(\rho(A),\rho(B^{(r)})\bigr)\ge2.
+	\]
+	Damit darf der Beweis der notwendigen Knoten- und Kantenzahlbedingung aus Lemma~\ref{lem:notwendig} nicht auf $\preceq_{\mathrm{pair}}$ übertragen werden. Ein konkretes Gegenbeispiel ist
+	\[
+	A=\begin{pmatrix}0&0&1\\0&0&1\\0&0&1\end{pmatrix},
+	\qquad
+	B=\begin{pmatrix}0&0&0\\0&0&0\\0&0&0\end{pmatrix}.
+	\]
+	Hier sind $\rho(A)=(0,0,7)$ und $\rho(B)=(0,0,0)$. Somit gilt $A\preceq_{\mathrm{pair}}B$, weil beide Folgen das benachbarte Paar $(0,0)$ enthalten, obwohl $m_A=3>0=m_B$. Ein SQL-Filter, der für Query $A$ Kandidaten mit weniger als drei Kanten entfernt, würde diesen Treffer des C++-Kriteriums ausschließen. Die formale Vollständigkeitsgarantie des Pre-Filters gilt daher nur für die oben definierte Relation $\preceq$, nicht für den durch \texttt{compareGraphs} implementierten Einzelgraph-Test. Dass die Backends in den dokumentierten Messreihen dieselben Treffer lieferten, ist ein empirischer Befund für diese Eingaben und kein allgemeiner Gleichheitsbeweis der Relationen.
+\end{bemerkung}
+
+\subsubsection*{Zyklische Prüfung, beide Richtungen und Ergebnis}
+
+\texttt{rotateSequence} erzeugt eine Rechtsrotation. Für eine Folge $(a,b,c,d)$ liefert eine Rotation um eins $(d,a,b,c)$. Der Rotationswert wird modulo der Folgenlänge reduziert; eine leere Folge wird unverändert zurückgegeben. Für $A\preceq B$ betrachtet \texttt{compareGraphs} nur dann Rotationen von $B$, wenn $n_B\ge n_A$. Für $B\preceq A$ wird entsprechend die umgekehrte Richtung nur bei $n_A\ge n_B$ geprüft. Sobald eine Rotation den Schwellwert erreicht, beendet eine \texttt{break}-Anweisung die Suche in dieser Richtung:
+
+\begin{lstlisting}[language=C++, caption={Abbruch nach einem passenden zyklischen Vergleich}]
+if (nB >= nA) {
+    for (std::size_t r = 0; r < nB; ++r) {
+        const auto rotatedB = rotateSequence(rowCompB, r);
+        if (computeLCS(rowCompA, rotatedB) >= 2) {
+            isSubgraphAinB = true;
+            break;
+        }
+    }
+}
+\end{lstlisting}
+
+Die Routine prüft danach auch die Gegenrichtung; eine positive Antwort in einer Richtung überspringt den anderen Test also nicht. Der Rückgabewert ist eine Auswahlentscheidung und muss deshalb von der Relation selbst unterschieden werden:
+\begin{itemize}
+	\item \texttt{KEEP\_A}: $B\preceq_{\mathrm{pair}} A$, aber nicht $A\preceq_{\mathrm{pair}} B$; behalten wird der umfassendere Graph $A$.
+	\item \texttt{KEEP\_B}: $A\preceq_{\mathrm{pair}} B$, aber nicht $B\preceq_{\mathrm{pair}} A$; behalten wird $B$.
+	\item \texttt{KEEP\_BOTH}: keine der beiden Richtungen wurde gefunden.
+	\item \texttt{IDENTICAL}: gleiche Knotenzahl und gleiche Zeilenkomponenten, bereits vor den Relationstests erkannt.
+	\item \texttt{EQUAL\_KEEP\_A} beziehungsweise \texttt{EQUAL\_KEEP\_B}: beide Richtungen treffen zu und die Knotenzahlen sind gleich; dann entscheidet die Gesamtzahl der Einsen in den Matrizen, bei Gleichstand wird $A$ behalten.
+\end{itemize}
+Bei wechselseitiger Enthaltung mit unterschiedlicher Knotenzahl behält der Code den Graphen mit mehr Knoten (\texttt{KEEP\_A} oder \texttt{KEEP\_B}). Die Enum-Werte beschreiben somit, welche Eingabe weitergeführt werden soll, und nicht einfach die Richtung eines einzelnen Relationstests.
+
+\subsubsection*{Aufwand und Implementierungsgrenzen}
+
+Für zwei Graphen mit höchstens $n$ Knoten benötigt die Signaturberechnung $O(n^2)$ Zeit. Im ungünstigsten Fall werden je Richtung bis zu $n$ Rotationen geprüft; jede dynamische Programmierung kostet $O(n^2)$ Zeit und Speicher. Damit bleibt die obere Schranke $O(n^3)$ Zeit und $O(n^2)$ temporärer Speicher. Frühe Abbrüche können typische Fälle verkürzen, ändern aber diese Worst-Case-Schranke nicht. Die Umsetzung verwendet \texttt{uint64\_t} für die Bitmasken. \texttt{MultiOmics} weist Eingaben mit mehr als $63$ Knoten zurück; die Einzelgraph-Schnittstelle \texttt{compareGraphs} besitzt dagegen keine entsprechende Knotenzahlprüfung. Für $n\ge64$ sind die Bitverschiebungen nicht sicher definiert beziehungsweise nicht mehr als vorgesehene Kodierung verwendbar. Die theoretischen und experimentellen Aussagen zur nativen Implementierung sind daher im darstellbaren Größenbereich zu lesen; größere Graphen erfordern eine breitere Repräsentation und explizite Eingabegrenzen.
+
+Die Bibliothek enthält außerdem ein separates Kommandozeilenprogramm, das JSON-Matrizen einliest, \texttt{compareGraphs} aufruft und Ergebniscode sowie Fehler als JSON ausgibt. Für Gen-DB wird im Backend-Experiment jedoch der direkte Library-Pfad über einen C-Wrapper und \texttt{ctypes} verwendet (Abschnitt~\ref{sec:backends}); dabei wird die Library pro Worker-Prozess geladen, nicht für jeden Kandidaten ein neuer Prozess gestartet. Diese Unterscheidung ist für die Messung wichtig, denn CLI-Prozessstart und JSON-Serialisierung wären zusätzliche Kosten außerhalb des hier beschriebenen Algorithmuskerns.
 
 \chapter{Systemarchitektur von Gen-DB}
 \label{sec:architektur}
@@ -581,7 +688,7 @@ Die in Abschnitt~\ref{sec:evaluation} präsentierten Diagramme beruhen auf einem
 	\label{def:vergleich}
 	Für ein Paar von Adjazenzmatrizen $(A,B)$ mit $A\in\{0,1\}^{n_A\times n_A}$, $B\in\{0,1\}^{n_B\times n_B}$, $n_A\le n_B$, werden zwei Entscheidungsverfahren auf dieselbe Eingabe angewendet und ihre Ausführungszeit mittels \texttt{time.perf\_counter()} gemessen:
 	\begin{itemize}
-		\item \textbf{Subgraph Algorithmus} (Referenzimplementierung gemäß den drei Schritten aus Abschnitt~\ref{sec:grundlagen}, reines Python mit \texttt{numpy}-Signaturberechnung und dynamischer LCS-Tabelle).
+		\item \textbf{Subgraph Algorithmus} (Referenzimplementierung gemäß dem Ablauf aus Abschnitt~\ref{sec:grundlagen}, reines Python mit \texttt{numpy}-Signaturberechnung und dynamischer LCS-Tabelle).
 		\item \textbf{VF2} \cite{cordella2004}, instanziiert über \texttt{networkx.algorithms.\allowbreak isomorphism.DiGraphMatcher(B,A).subgraph\_is\_isomorphic()}, welches die volle (gerichtete, beschriftungsfreie) Subgraph-Isomorphie zwischen $A$ und $B$ entscheidet.
 	\end{itemize}
 \end{definition}
@@ -683,7 +790,7 @@ Tabelle~\ref{tab:literatur} fasst die in dieser Arbeit gemessenen Größenordnun
 		\toprule
 		Verfahren & Worst-Case-Komplexität & Entschiedene Relation & Charakteristik \\
 		\midrule
-		Subgraph Algorithmus \cite{epp2026subgraph} & $O(n^3)$, bedingt optimal unter SETH \cite{abboud2015} & zyklische LCS-basierte Subsequenz-Relation $\preceq$ & polynomiell, eingabeunabhängige Schranke, geringe Varianz (Tabelle~\ref{tab:runtime}) \\
+		Subgraph Algorithmus \cite{epp2026subgraph} & $O(n^3)$, bedingt optimal unter SETH \cite{abboud2015} & zyklische vollständige Teilsequenz-Relation $\preceq$ & polynomiell, eingabeunabhängige Schranke, geringe Varianz (Tabelle~\ref{tab:runtime}) \\
 		Ullmann \cite{ullmann1976} & $O(n^{n})$ bzw.\ $O(n_A!\cdot n_B^{n_A})$ (naiv, mit Pruning praktisch geringer) & (Sub-)Graphisomorphie, Knotenbijektion $\phi$ & historischer Referenzalgorithmus, Backtracking mit Refinement \\
 		VF2 \cite{cordella2004} & $O(n!\cdot n)$ Worst Case, oft sub-exponentiell in der Praxis & (Sub-)Graphisomorphie & Look\-ahead-Pruning (Schemata $0,1,2$); in dieser Arbeit gemessen, vgl.\ Tab.~\ref{tab:runtime} \\
 		RI / RI-DS \cite{bonnici2013} & worst-case exponentiell, empirisch deutlich schneller als VF2 auf Bioinformatik-Graphen & (Sub-)Graphisomorphie & für biologische Netzwerke (PPI, Metabolismus) optimierte Knotenordnung \\
@@ -924,7 +1031,7 @@ Daraus ergeben sich vier Hypothesen. \textbf{H1:} Ein direkter Aufruf des native
 \section{Implementierungen und Ausführungspfade}
 \label{sec:backend_implementierungen}
 
-Beide Backends führen denselben Subgraph Algorithmus aus. Wie in Abschnitt~\ref{sec:grundlagen} beschrieben, vergleicht dieser die aus den Adjazenzmatrizen abgeleiteten Zeilenkomponenten unter zyklischen Rotationen und entscheidet anhand einer dynamischen Übereinstimmungsprüfung über die Relation der Graphen. Die Python-Implementierung wird über \texttt{Subgraph().compare\_graphs(A, B)} aufgerufen. Für C++ wird die statische Bibliothek \texttt{libsubgraphlib.a} mit einem C-Wrapper zu einer DLL gelinkt und über \texttt{ctypes} angesprochen. Die DLL wird einmal pro Worker-Prozess geladen; ein Vergleich erfolgt danach als direkter Funktionsaufruf.
+Der Backend-Versuch vergleicht die Python-Implementierung \texttt{Subgraph().compare\_graphs(A, B)} mit \texttt{SubgraphAlgorithm::compareGraphs} aus der nativen Bibliothek. Beide arbeiten mit Signaturfolgen und zyklischen Übereinstimmungsprüfungen; die konkrete native Schwelle und ihre Abweichung von der formalen Relation sind in Bemerkung~\ref{bem:cpp_relation} offengelegt. Die Übereinstimmung ihrer Trefferlisten im abgeschlossenen Experiment ist daher ein Ergebnis für die getesteten Eingaben, kein Beweis, dass beide Implementierungen die in den formalen Sätzen definierte vollständige Teilsequenzrelation realisieren. Für C++ wird die statische Bibliothek \texttt{libsubgraphlib.a} mit einem C-Wrapper zu einer DLL gelinkt und über \texttt{ctypes} angesprochen. Die DLL wird einmal pro Worker-Prozess geladen; ein Vergleich erfolgt danach als direkter Funktionsaufruf.
 
 CPython erlaubt sowohl native Erweiterungsmodule als auch den Aufruf einer bestehenden C-Schnittstelle; \texttt{ctypes} wird hier für den letzteren Weg verwendet. Für C++ wären etwa pybind11-Bindings eine andere Integrationsmöglichkeit. Cython und tracing JITs wie PyPy zeigen weitere Ansätze, bei denen typisierte beziehungsweise häufig ausgeführte Python-Pfade nativ kompiliert werden \cite{python314extending,python314ctypes,pybind11docs,behnel2011cython,bolz2009pypy}. Diese Alternativen werden in diesem Experiment nicht gegeneinander getestet; die Hinweise dokumentieren lediglich, dass der Sprachwechsel keine isolierte Sprachmessung darstellt, sondern eine Entscheidung über Implementierung und FFI-Grenze.
 
@@ -1234,6 +1341,39 @@ Der Vergleich baut auf den Zeilenkomponenten der Matrizen auf, also den aus den 
 \end{itemize}
 
 Die kohärente Bedingung ist die strengere Kopplung: Ein kohärenter Treffer erfüllt auch die unabhängige Bedingung. Die Modi beantworten somit unterschiedliche fachliche Fragen. Kohärent sucht nach einem über mehrere Ebenen hinweg an derselben Stelle erhaltenen Muster; unabhängig fragt, ob das Muster in jeder Ebene vorkommt, auch wenn die Positionen voneinander abweichen. Das Experiment prüft diese Unterscheidung anhand gezielt konstruierter Beispiele und darf nicht mit einer validierten biologischen Kausalbeziehung zwischen den Schichten gleichgesetzt werden.
+
+\subsection{Native C++-Implementierung des Schichtvergleichs}
+\label{sec:multiomics_cpp}
+
+Das Projekt \texttt{csubgraph} implementiert neben dem Einzelgraph-Kern auch \texttt{MultiOmics}. Ein Schichtstapel ist dort ein \texttt{LayerStack}, also ein Vektor binärer Adjazenzmatrizen. Die Validierung verlangt mindestens eine Schicht, quadratische Matrizen gleicher Knotenzahl und höchstens $63$ Knoten. Beim Vergleich zweier Stapel müssen außerdem die Schichtzahlen übereinstimmen. Jede Matrix wird zunächst mit \texttt{SubgraphAlgorithm::calculateSignatures} verarbeitet; \texttt{layerRowComponents} entfernt anschließend je Schicht die Spaltenkodierung und liefert die Komponentenfolgen.
+
+Die API macht die beiden unabhängigen Designentscheidungen explizit: \texttt{Mode::COHERENT} oder \texttt{Mode::INDEPENDENT} legt die Kopplung der Schichten fest; \texttt{Strategy::BIGRAM} oder \texttt{Strategy::DYNAMIC} bestimmt, wie eine Übereinstimmung gefunden wird. Ein Aufruf sieht beispielsweise so aus:
+
+\begin{lstlisting}[language=C++, caption={Aufruf des nativen mehrschichtigen Vergleichs}]
+const auto result = MultiOmics::compareLayered(
+    queryLayers,
+    candidateLayers,
+    MultiOmics::Mode::COHERENT,
+    MultiOmics::Strategy::BIGRAM
+);
+\end{lstlisting}
+
+Im unabhängigen Modus vergleicht die Implementierung jede Schicht separat und liefert nur dann einen Treffer, wenn jede Schicht ihr passendes Komponentenpaar findet. Die jeweiligen Positionen dürfen dabei voneinander abweichen. Im kohärenten Modus bildet sie dagegen für jede Spaltenposition das Tupel der Komponenten über alle Schichten, ordnet gleichen Tupeln über ein gemeinsames Wörterbuch dieselbe interne Zahl zu und führt den Sequenzvergleich auf diesen Zahlenfolgen aus. Weil jede Position durch das vollständige Schichttupel repräsentiert wird, kann ein gemeinsames Paar nur dann übereinstimmen, wenn die beteiligten Schichten dieselben beiden Positionen stützen.
+
+Die dynamische Strategie entspricht dem zuvor beschriebenen Rotations- und DP-Verfahren: Sie probiert die Rotationen der Kandidatenfolge aus und berechnet für jede die längste gemeinsame zusammenhängende Teilfolge. Die Bigramm-Strategie nutzt direkt die notwendige und hinreichende Bedingung für eine solche Übereinstimmung der Länge mindestens zwei: Es genügt, ein benachbartes Wertepaar aus der Query zu finden, das im Kandidaten als zyklisch benachbartes Paar vorkommt. Dafür werden die zyklischen Paare des Kandidaten in einer geordneten Menge abgelegt:
+
+\begin{lstlisting}[language=C++, caption={Bigramm-Prüfung auf ein zyklisch benachbartes Paar}]
+for (std::size_t k = 0; k < b.size(); ++k) {
+    cyclicPairs.insert({b[k], b[(k + 1) % b.size()]});
+}
+for (std::size_t i = 0; i + 1 < a.size(); ++i) {
+    if (cyclicPairs.count({a[i], a[i + 1]}) != 0) {
+        return true;
+    }
+}
+\end{lstlisting}
+
+Das Einfügen und Nachschlagen in \texttt{std::set} kostet $O(n\log n)$; im dynamischen Verfahren kosten die $n$ Rotationen mit je einer $O(n^2)$-DP bis zu $O(n^3)$. Beide Strategien sollen dieselbe Relation entscheiden: Die Bigramm-Charakterisierung ist daher nicht eine andere, heuristische Suchsemantik, sondern eine äquivalente Ausführung dieses konkreten Schwellwerttests. \texttt{compareLayered} erkennt zunächst identische Schichtkomponentenfolgen. Andernfalls testet es beide Enthaltungsrichtungen und gibt die entsprechenden Auswahlwerte zurück. Bei wechselseitiger Enthaltung verwendet es die Gesamtzahl der Kanten über alle Schichten als Tie-Breaker. Die Bibliothek bietet daneben Projektion auf ausgewählte Schichten sowie Konsens-, Vereinigungs- und Schnittintegration; diese sind Vorverarbeitungsschritte und nicht mit dem kohärenten beziehungsweise unabhängigen Vergleichsmodus gleichzusetzen.
 
 \section{Versuchsaufbau und Datengenerierung}
 \label{sec:multiomics_setup}

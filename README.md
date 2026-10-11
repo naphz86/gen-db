@@ -12,13 +12,24 @@ Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Fro
 - [Voraussetzungen](#voraussetzungen)
 - [Installation](#installation)
 - [Abhängigkeiten](#abhängigkeiten)
+  - [Optional: C++-Implementierung (csubgraph)](#optional-c-implementierung-csubgraph)
+    - [Aufbau der Brücke](#aufbau-der-brücke)
+    - [Voraussetzungen](#voraussetzungen-1)
+    - [Wo die Bibliothek gesucht wird](#wo-die-bibliothek-gesucht-wird)
+    - [Bibliotheksdatei je Plattform](#bibliotheksdatei-je-plattform)
+    - [Zwischenspeicher und Neuaufbau](#zwischenspeicher-und-neuaufbau)
+    - [Umgebungsvariablen und Optionen](#umgebungsvariablen-und-optionen)
+    - [Verhalten bei Fehlern](#verhalten-bei-fehlern)
+    - [Fehlersuche](#fehlersuche)
+    - [Ausblick: plattformneutrales Laden](#ausblick-plattformneutrales-laden)
+  - [Multi-Omics](#multi-omics)
+- [Universelle Kodierung](#universelle-kodierung-universal-coding)
+  - [Universal-API](#universal-api)
 - [SQL-Struktur](#sql-struktur)
 - [1.000.000 Netzwerke](#1000000-netzwerke)
 - [Server starten](#server-starten)
 - [Netzwerke suchen](#netzwerke-suchen)
 - [Multi-Omics-API](#multi-omics-api)
-- [Universelle Kodierung](#universelle-kodierung-universal-coding)
-- [Universal-API](#universal-api)
 - [Automatisch testen](#automatisch-testen)
 - [UML mit Pyreverse](#uml-mit-pyreverse)
 - [Erwerb](#erwerb)
@@ -68,21 +79,92 @@ Es wird die API des Subgraph Algorithmus genutzt mit `Subgraph().compare_graphs(
 
 ### Optional: C++-Implementierung (csubgraph)
 
-Die Suche nutzt die C++-Implementierung aus dem Repository `csubgraph` als Bibliothek, wenn in der `.env` der Pfad zu `libsubgraphlib.a` gesetzt ist. Ist `CSUBGRAPH_LIB_PATH` nicht gesetzt (leer oder auskommentiert), wird die Python-Implementierung verwendet.
+Die Suche kann die C++-Implementierung aus dem Repository `csubgraph` als Bibliothek nutzen. Aktiviert wird sie über die `.env`; ohne Einstellung läuft die Python-Implementierung.
 
 ```env
 # Datei libsubgraphlib.a oder Projekt-/Build-Ordner von csubgraph; leer = Python
-CSUBGRAPH_LIB_PATH=C:/Users/<name>/Git/csubgraph/build/libsubgraphlib.a
+CSUBGRAPH_LIB_PATH=C:/Users/<name>/Git/csubgraph/build/libsubgraphlib.a   # Windows
+# CSUBGRAPH_LIB_PATH=/home/<name>/git/csubgraph/build/libsubgraphlib.a     # Linux, macOS
 ```
 
-Der Pfad darf direkt auf `libsubgraphlib.a` zeigen oder auf einen Ordner, in dem sie liegt (Projektordner, `build/`, `build/Release`). Eine statische Bibliothek kann Python nicht direkt laden. Beim ersten Gebrauch linkt Gen-DB sie deshalb mit einem kleinen C-Wrapper (`src/backend/native/csubgraph_shim.cpp`) zu einer DLL/`.so` und ruft sie per `ctypes` direkt im Worker-Prozess auf, ohne Prozessstart und ohne JSON je Vergleich. Voraussetzungen:
+#### Aufbau der Brücke
 
-- ein C++-Compiler im `PATH` (oder über die Umgebungsvariable `CXX`), unter Windows derselbe MinGW-w64 `g++`, mit dem `libsubgraphlib.a` gebaut wurde
-- die Bibliothek muss mit diesem Compiler gebaut sein; der Header `SubgraphAlgorithm.h` wird neben der Bibliothek (Projektordner) gesucht, sonst wird die mitgelieferte Kopie in `src/backend/native/` verwendet
+```
+Suche (crud.py) → subgraph_executor → csubgraph_native.py (ctypes) → C-Wrapper (DLL/.so/.dylib) → libsubgraphlib.a (C++)
+                                                                      csubgraph_shim.cpp / csubgraph_omics_shim.cpp
+```
 
-Die gelinkte Wrapper-Bibliothek liegt im Cache-Ordner `<temp>/gen-db-csubgraph` (änderbar mit `GENDB_NATIVE_CACHE`) und wird nur neu gebaut, wenn sich `libsubgraphlib.a`, der Wrapper oder der Header ändern. Der Build läuft einmalig beim Start, bevor die Worker-Prozesse erzeugt werden. Ist die Bibliothek nicht auffindbar oder nicht nutzbar (kein Compiler, Link- oder Ladefehler), steht der Grund als Warnung im Log und es wird die Python-Implementierung verwendet. Beim Start steht im Log, welcher Algorithmus verwendet wird. Die Ergebnisse der C++-Version werden auf die Python-Werte abgebildet (`KEEP_B` → `keep_B`, `IDENTICAL` → `equal_keep_A`/`equal_keep_B`), sodass die Suche in `crud.py` unverändert bleibt. Im Docker-Image ist csubgraph nicht enthalten; dort läuft die Python-Implementierung.
+| Schicht | Aufgabe |
+|---------|---------|
+| `csubgraph_native.py` | Findet die Bibliothek, baut und lädt den Wrapper per `ctypes`, prüft die Schnittstellenversion und bildet die Ergebnisse auf die Python-Werte ab |
+| `native/csubgraph_shim.cpp` | C-Schnittstelle für den Einzelvergleich (`csub_compare`, `csub_abi_version`) |
+| `native/csubgraph_omics_shim.cpp` | C-Schnittstelle für Multi-Omics (`csub_omics_compare`, `csub_omics_abi_version`) |
+| `libsubgraphlib.a` | Statische C++-Bibliothek aus dem Repository `csubgraph` |
 
-Hinweis: Das CMake-Projekt von csubgraph baut die Bibliothek mit `--coverage` (gcov). Das wird beim Linken erkannt und berücksichtigt, die Bibliothek schreibt dann beim Prozessende `.gcda`-Dateien. Für den Produktivbetrieb und für Messungen ist eine Bibliothek ohne Coverage-Instrumentierung etwas schneller.
+Eine statische Bibliothek kann Python nicht direkt laden: `ctypes` öffnet nur dynamische Bibliotheken mit C-Funktionen. Beim ersten Gebrauch linkt Gen-DB deshalb `libsubgraphlib.a` mit dem passenden C-Wrapper zu einer dynamischen Bibliothek und ruft sie per `ctypes` direkt im Worker-Prozess auf, ohne Prozessstart und ohne JSON je Vergleich.
+
+Dass Gen-DB diesen Schritt **automatisch** ausführt, ist eine bewusste Entscheidung: Gen-DB ist eine Anwendung mit einem klar definierten Start. Der Build läuft einmalig dort, bevor die Worker-Prozesse erzeugt werden, und das Ergebnis wird zwischengespeichert. Das Python-Paket [`subgraph-sat-solver-econ`](https://github.com/naphez86/subgraph-sat-solver-econ) geht den entgegengesetzten Weg und baut seine Bibliothek ausdrücklich vorab, weil es als Bibliothek und für reproduzierbare Messungen gedacht ist.
+
+#### Voraussetzungen
+
+- ein C++-Compiler im `PATH` (oder über die Umgebungsvariable `CXX`). Gesucht wird in der Reihenfolge `$CXX`, `g++`, `c++`, `clang++`. Unter Windows derselbe MinGW-w64 `g++`, mit dem `libsubgraphlib.a` gebaut wurde
+- die Bibliothek muss mit diesem Compiler gebaut sein und als `libsubgraphlib.a` vorliegen (Format von GCC/MinGW/Clang); eine MSVC-`.lib` wird nicht gefunden
+- der Header `SubgraphAlgorithm.h` (für Multi-Omics zusätzlich `MultiOmics.h`) wird neben der Bibliothek gesucht (Projektordner, Ordner darüber, `include/`), sonst wird die mitgelieferte Kopie in `src/backend/native/` verwendet
+
+#### Wo die Bibliothek gesucht wird
+
+`CSUBGRAPH_LIB_PATH` darf direkt auf `libsubgraphlib.a` zeigen oder auf einen Ordner. Im Ordner wird in dieser Reihenfolge gesucht: der Ordner selbst, `build/`, `build/Release`, `Release`. Ist die Einstellung leer oder die Datei nicht auffindbar, wird die Python-Implementierung verwendet.
+
+#### Bibliotheksdatei je Plattform
+
+Die eingelesene Bibliothek heißt auf allen Plattformen `libsubgraphlib.a`. Der daraus gelinkte Wrapper erhält den Dateityp des Betriebssystems und liegt im Cache-Ordner:
+
+| Plattform | Wrapper-Datei im Cache | Besonderheiten beim Linken |
+|-----------|------------------------|----------------------------|
+| Windows (MinGW) | `csubgraph_shim_<hash>.dll` | C++-Laufzeit statisch gelinkt (`-static`), damit keine `libstdc++-6.dll` nachgeladen werden muss |
+| Linux | `csubgraph_shim_<hash>.so` | `-fPIC`, gesamter Archivinhalt über `--whole-archive` |
+| macOS | `csubgraph_shim_<hash>.dylib` | gesamter Archivinhalt über `-force_load` |
+
+Für Multi-Omics entsteht zusätzlich `csubgraph_omics_shim_<hash>.<Endung>`. Das sind drei Binärformate mit eigenen Lademechanismen des Betriebssystems; alle plattformabhängigen Teile (Dateiendung, Linker-Optionen, Export-Markierung im Wrapper) sind in `csubgraph_native.py` und `src/backend/native/` gebündelt.
+
+#### Zwischenspeicher und Neuaufbau
+
+Der gelinkte Wrapper liegt im Cache-Ordner `<temp>/gen-db-csubgraph` (änderbar mit `GENDB_NATIVE_CACHE`). Der Dateiname enthält einen Hash über `libsubgraphlib.a`, den Wrapper, die Header und die Schnittstellenversion. Er wird nur neu gebaut, wenn sich eines davon ändert. Der Build schreibt zuerst in eine temporäre Datei und benennt sie atomar um, damit parallel startende Worker keine halbfertige Datei laden. Nach dem Aktualisieren von csubgraph muss `libsubgraphlib.a` neu gebaut werden; Gen-DB erkennt die Änderung am Hash.
+
+#### Umgebungsvariablen und Optionen
+
+| Einstellung | Wirkung | Standard |
+|-------------|---------|----------|
+| `CSUBGRAPH_LIB_PATH` (`.env`) | `libsubgraphlib.a` oder Ordner, der sie enthält | leer = Python |
+| `CXX` | Zu verwendender C++-Compiler | `g++`, `c++`, `clang++` im `PATH` |
+| `GENDB_NATIVE_CACHE` | Cache-Ordner für die gelinkten Wrapper | `<temp>/gen-db-csubgraph` |
+| `--csubgraph-lib-path` | Überschreibt `CSUBGRAPH_LIB_PATH` in den Experimenten (z. B. `experiment_search_universal.py`) | Wert aus der `.env` |
+
+#### Verhalten bei Fehlern
+
+Ist die Bibliothek nicht auffindbar oder nicht nutzbar (kein Compiler, Link- oder Ladefehler), steht der Grund als Warnung im Log und es wird die Python-Implementierung verwendet. Beim Start steht im Log, welcher Algorithmus verwendet wird. Eine ältere `libsubgraphlib.a` ohne `MultiOmics` betrifft nur Multi-Omics: der Einzelvergleich bleibt bei C++, Multi-Omics nutzt Python. Die Experimente dagegen prüfen, dass kein stiller Rückfall stattfindet. Im Docker-Image ist csubgraph nicht enthalten; dort läuft die Python-Implementierung.
+
+Die Ergebnisse der C++-Version werden auf die Python-Werte abgebildet (`KEEP_B` → `keep_B`, `IDENTICAL` → `equal_keep_A`/`equal_keep_B`), sodass die Suche in `crud.py` unverändert bleibt.
+
+#### Fehlersuche
+
+| Meldung im Log | Wahrscheinliche Ursache | Abhilfe |
+|----------------|-------------------------|---------|
+| `libsubgraphlib.a nicht gefunden (CSUBGRAPH_LIB_PATH=…)` | Pfad falsch, Bibliothek nicht gebaut oder MSVC-Format | Pfad prüfen, csubgraph mit GCC/MinGW bauen |
+| `kein C++-Compiler gefunden (g++ in den PATH legen oder Umgebungsvariable CXX setzen)` | Compiler fehlt oder liegt nicht im `PATH` | Compiler installieren, `PATH` oder `CXX` setzen |
+| `Build der Wrapper-Bibliothek fehlgeschlagen (…)` | Compiler und der Compiler der Bibliothek passen nicht zusammen, Header fehlen | Mit demselben Compiler wie csubgraph bauen; Ausgabe in der Meldung lesen |
+| `Build der Wrapper-Bibliothek nicht möglich` | Compiler nicht startbar oder Zeitlimit des Builds überschritten | Compiler direkt aufrufen und prüfen |
+| `Wrapper-Bibliothek nicht ladbar` | Architektur passt nicht (32 gegen 64 Bit), Cache-Datei beschädigt | Cache-Ordner löschen, Python und Compiler mit gleicher Architektur nutzen |
+| `Wrapper-Version … statt …` | Cache stammt aus einem anderen Stand | Cache-Ordner löschen |
+| `… enthält keine MultiOmics-Klasse (csubgraph mit MultiOmics.cpp neu bauen)` | Ältere `libsubgraphlib.a` | csubgraph neu bauen |
+
+Hinweis: Das CMake-Projekt von csubgraph baut die Bibliothek mit `--coverage` (gcov). Das wird beim Linken erkannt und berücksichtigt (`-lgcov`), die Bibliothek schreibt dann beim Prozessende `.gcda`-Dateien. Für den Produktivbetrieb und für Messungen ist eine Bibliothek ohne Coverage-Instrumentierung etwas schneller.
+
+#### Ausblick: plattformneutrales Laden
+
+Die oben beschriebenen Plattformunterschiede (Dateiendung, Linker-Optionen, Export-Markierung, Laufzeitbibliotheken, Fehlermeldungen) betreffen nicht dieses Projekt allein. Der Vorschlag [A Unified Shared Library Format (`.sl`) with a Standardized Loading Procedure](https://github.com/naphez86/blog/blob/main/unified-shared-library-proposal.md) beschreibt, wie ein einheitliches Format und vor allem ein standardisiertes, betriebssystemunabhängiges Ladeverfahren (eine Suchreihenfolge, ein Fehlermodell, ein Lebenszyklus) diese Teile aus jedem Projekt entfernen könnten.
+
+Das ist ein Diskussionsvorschlag. In diesem Repository ist er **nicht umgesetzt**; es gilt der in diesem Abschnitt beschriebene Stand mit `.dll`, `.so` und `.dylib`.
 
 #### Backend-Experiment
 
@@ -144,7 +226,7 @@ Ein Multi-Omics-Netzwerk besteht aus mehreren Schichten (z. B. Transkriptom, Pro
 
 Die Suche kennt zwei Modi (`mode`): `coherent` (Standard) verlangt, dass alle Schichten der Query an derselben Position des Kandidaten übereinstimmen, `independent` erlaubt je Schicht eine eigene Position. `coherent` ist strenger; jeder kohärente Treffer ist auch ein unabhängiger Treffer. Ungültige Eingaben (doppelte Schichtnamen, nicht quadratische oder nicht binäre Matrizen, mehr als 63 Knoten, falsche Zahl an Labels) liefern `422`.
 
-Der Algorithmus wird **genauso wie der Subgraph Algorithmus über die `.env`** ausgewählt, es gibt keine neue Einstellung: Zeigt `CSUBGRAPH_LIB_PATH` auf eine `libsubgraphlib.a`, die `MultiOmics` enthält (csubgraph mit `MultiOmics.cpp`), läuft die Suche über die C++-Klasse `MultiOmics`. Dafür wird ein zweiter C-Wrapper (`src/backend/native/csubgraph_omics_shim.cpp`) mit derselben Bibliothek gelinkt und per `ctypes` im Worker-Prozess aufgerufen, gebaut und gecacht wie der Wrapper für den Einzelvergleich. Ist der Pfad nicht gesetzt oder die Bibliothek nicht nutzbar, steht der Grund als Warnung im Log und es läuft die Python-Implementierung (`src/backend/multiomics_python.py`). Eine ältere `libsubgraphlib.a` ohne `MultiOmics` betrifft nur Multi-Omics: der Einzelvergleich bleibt bei C++, Multi-Omics nutzt Python. Nach dem Aktualisieren von csubgraph muss die Bibliothek neu gebaut werden. Beim Start steht im Log, welcher Algorithmus für Multi-Omics gewählt wurde.
+Der Algorithmus wird **genauso wie der Subgraph Algorithmus über die `.env`** ausgewählt, es gibt keine neue Einstellung: Zeigt `CSUBGRAPH_LIB_PATH` auf eine `libsubgraphlib.a`, die `MultiOmics` enthält (csubgraph mit `MultiOmics.cpp`), läuft die Suche über die C++-Klasse `MultiOmics`. Dafür wird ein zweiter C-Wrapper (`src/backend/native/csubgraph_omics_shim.cpp`) mit derselben Bibliothek gelinkt und per `ctypes` im Worker-Prozess aufgerufen, gebaut und gecacht wie der Wrapper für den Einzelvergleich (Details unter [Optional: C++-Implementierung](#optional-c-implementierung-csubgraph)). Ist der Pfad nicht gesetzt oder die Bibliothek nicht nutzbar, steht der Grund als Warnung im Log und es läuft die Python-Implementierung (`src/backend/multiomics_python.py`). Eine ältere `libsubgraphlib.a` ohne `MultiOmics` betrifft nur Multi-Omics: der Einzelvergleich bleibt bei C++, Multi-Omics nutzt Python. Nach dem Aktualisieren von csubgraph muss die Bibliothek neu gebaut werden. Beim Start steht im Log, welcher Algorithmus für Multi-Omics gewählt wurde.
 
 #### Multi-Omics-Experiment
 
@@ -590,7 +672,7 @@ Biologische Prozesse spielen sich selten auf nur einer Ebene ab: Ein Gen wird tr
 
 ### Schnellstart in drei Schritten
 
-Server starten (siehe [Starten](#starten)) und dann in PowerShell:
+Server starten (siehe [Starten](#server-starten)) und dann in PowerShell:
 
 **1. Netzwerk anlegen**
 
@@ -901,12 +983,11 @@ Die Wahrheit steht immer im Code.
 
 ```bash
 (venv) PS C:\Users\Internet\Git\gen-db> pyreverse -o dot -p gen .\src\backend\
-Analysed 13 modules with a total of 14 imports
+Analysed 13 modules with a total of 15 imports
 (venv) PS C:\Users\Internet\Git\gen-db> (Get-Content classes_gen.dot) -replace 'rankdir=LR', 'rankdir=TB' -replace 'charset="utf-8"', 'charset="utf-8"; rankdir=TB; nodesep=0.2; ranksep=0.4;' | Set-Content classes_gen_fixed.dot
 (venv) PS C:\Users\Internet\Git\gen-db> dot -Tpdf classes_gen_fixed.dot -o classes_gen_compact.pdf
 (venv) PS C:\Users\Internet\Git\gen-db> (Get-Content packages_gen.dot) -replace 'rankdir=LR', 'rankdir=TB' -replace 'charset="utf-8"', 'charset="utf-8"; rankdir=TB; nodesep=0.3; ranksep=0.5;' | Set-Content packages_gen_fixed.dot
 (venv) PS C:\Users\Internet\Git\gen-db> dot -Tpdf packages_gen_fixed.dot -o packages_gen_compact.pdf
-(venv) PS C:\Users\Internet\Git\gen-db> 
 ```
 
 ## Erwerb
