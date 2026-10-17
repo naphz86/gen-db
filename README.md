@@ -21,7 +21,7 @@ Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Fro
     - [Umgebungsvariablen und Optionen](#umgebungsvariablen-und-optionen)
     - [Verhalten bei Fehlern](#verhalten-bei-fehlern)
     - [Fehlersuche](#fehlersuche)
-    - [Ausblick: plattformneutrales Laden](#ausblick-plattformneutrales-laden)
+    - [Ausblick: Plattformneutrales Laden](#ausblick-plattformneutrales-laden)
   - [Multi-Omics](#multi-omics)
 - [Universelle Kodierung](#universelle-kodierung-universal-coding)
   - [Universal-API](#universal-api)
@@ -160,7 +160,7 @@ Die Ergebnisse der C++-Version werden auf die Python-Werte abgebildet (`KEEP_B` 
 
 Hinweis: Das CMake-Projekt von csubgraph baut die Bibliothek mit `--coverage` (gcov). Das wird beim Linken erkannt und berücksichtigt (`-lgcov`), die Bibliothek schreibt dann beim Prozessende `.gcda`-Dateien. Für den Produktivbetrieb und für Messungen ist eine Bibliothek ohne Coverage-Instrumentierung etwas schneller.
 
-#### Ausblick: plattformneutrales Laden
+#### Ausblick: Plattformneutrales Laden
 
 Die oben beschriebenen Plattformunterschiede (Dateiendung, Linker-Optionen, Export-Markierung, Laufzeitbibliotheken, Fehlermeldungen) betreffen nicht dieses Projekt allein. Der Vorschlag [A Unified Shared Library Format (`.sl`) with a Standardized Loading Procedure](https://github.com/naphz86/blog/blob/main/unified-shared-library-proposal.md) beschreibt, wie ein einheitliches Format und vor allem ein standardisiertes, betriebssystemunabhängiges Ladeverfahren (eine Suchreihenfolge, ein Fehlermodell, ein Lebenszyklus) diese Teile aus jedem Projekt entfernen könnten.
 
